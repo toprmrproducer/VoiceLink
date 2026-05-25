@@ -1,10 +1,8 @@
-export default function Home() {
-  return (
-    <main className="min-h-screen flex items-center justify-center">
-      <div className="text-center">
-        <h1 className="text-3xl font-bold">voice-platform UI</h1>
-        <p className="text-zinc-500 mt-2">System OK</p>
-      </div>
-    </main>
-  );
+import { redirect } from "next/navigation";
+
+import { getCurrentUser } from "@/lib/session";
+
+export default async function Home() {
+  const user = await getCurrentUser();
+  redirect(user ? "/dashboard" : "/login");
 }

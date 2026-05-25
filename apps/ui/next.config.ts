@@ -6,6 +6,9 @@ const nextConfig: NextConfig = {
   output: "standalone",
   // Monorepo: trace from the repo root (../..) so workspace deps are included.
   outputFileTracingRoot: path.resolve(process.cwd(), "../.."),
+  // Transpile workspace packages so Turbopack handles their `.js` ESM
+  // re-exports correctly (the source is `.ts`, NodeNext-style suffixed).
+  transpilePackages: ["@voiceplatform/shared"],
 };
 
 export default nextConfig;
