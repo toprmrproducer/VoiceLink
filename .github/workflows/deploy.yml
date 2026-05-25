@@ -64,18 +64,16 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          script_stop: true
           script: |
             set -euo pipefail
             cd /opt/voiceplatform
             export GH_OWNER=${{ steps.owner.outputs.lc }}
             export TAG=${{ github.sha }}
-            # GHCR pull needs auth on private packages — public on first push,
-            # but logged-in pull is robust either way.
+            # GHCR pull needs auth on private packages.
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             docker compose -f docker-compose.prod.yml pull api ui caddy mongo redis
             docker compose -f docker-compose.prod.yml up -d
-            # Wait for api to be healthy
+            # Wait for api container to be healthy
             for i in $(seq 1 30); do
               if docker compose -f docker-compose.prod.yml exec -T api wget -qO- http://localhost:4000/health >/dev/null 2>&1; then
                 echo "api healthy after ${i}s"
@@ -83,5 +81,15 @@ jobs:
               fi
               sleep 1
             done
-            # Smoke test through Caddy
-            curl -fsS https://api.auto4you.in/health
+            # Smoke test through Caddy. First request after a fresh cert provisioning
+            # can take ~30s for Let's Encrypt + propagation. Retry up to 60s.
+            for i in $(seq 1 60); do
+              if curl -fsS --max-time 5 https://api.auto4you.in/health >/dev/null 2>&1; then
+                echo "TLS healthcheck passed after ${i}s"
+                curl -fsS https://api.auto4you.in/health
+                exit 0
+              fi
+              sleep 1
+            done
+            echo "TLS healthcheck failed after 60s"
+            exit 1
