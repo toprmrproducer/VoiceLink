@@ -37,10 +37,13 @@ services:
     depends_on: [api]
 
   engine:
-    image: ghcr.io/${GH_OWNER}/voice-engine:${TAG:-latest}
+    image: ghcr.io/${GH_OWNER}/voice-engine:${ENGINE_TAG:-latest}
     restart: unless-stopped
     env_file: .env.engine
     depends_on: [redis]
+    # Phase 0 launches without the engine. Bring it up with:
+    #   docker compose --profile engine up -d
+    profiles: [engine]
 
   mongo:
     image: mongo:7
