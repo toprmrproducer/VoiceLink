@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
+    "dev": "tsx watch src/main.ts",
     "build": "tsc",
-    "start": "node dist/server.js",
+    "start": "node dist/main.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit"

@@ -1,8 +1,5 @@
 import express, { type Express } from "express";
 import cors from "cors";
-import { createLogger } from "./lib/logger.js";
-
-const log = createLogger("server");
 
 export function createApp(): Express {
   const app = express();
@@ -14,10 +11,4 @@ export function createApp(): Express {
   });
 
   return app;
-}
-
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const port = Number(process.env.PORT ?? 4000);
-  const app = createApp();
-  app.listen(port, () => log.info({ port }, "@voiceplatform/api listening"));
 }

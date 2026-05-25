@@ -17,5 +17,6 @@ jobs:
           node-version: "20"
           cache: "pnpm"
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @voiceplatform/api lint
-      - run: pnpm --filter @voiceplatform/api test
+      - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm build
