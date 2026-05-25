@@ -1,0 +1,17 @@
+{
+  "name": "@voiceplatform/shared",
+  "version": "0.0.1",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@voiceplatform/tsconfig": "workspace:*",
+    "typescript": "^5.6.0"
+  }
+}
