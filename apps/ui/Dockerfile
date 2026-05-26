@@ -8,17 +8,17 @@ WORKDIR /repo
 
 # --- deps: install full workspace so workspace links resolve ---
 FROM base AS deps
-COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml turbo.json ./
 COPY packages ./packages
 COPY apps/ui/package.json ./apps/ui/package.json
 RUN pnpm install --frozen-lockfile
 
-# --- build: next build with standalone output ---
+# --- build: build shared first (turbo dep graph), then next build standalone ---
 FROM base AS build
 COPY --from=deps /repo /repo
 COPY apps/ui ./apps/ui
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN pnpm --filter @voiceplatform/ui build
+RUN pnpm exec turbo run build --filter=@voiceplatform/ui
 
 # --- run: copy ONLY the standalone bundle + static + public ---
 FROM node:20-alpine AS run
