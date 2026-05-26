@@ -4,6 +4,7 @@ import cors from "cors";
 import { authRouter } from "./routes/auth.routes.js";
 import { adminRouter } from "./routes/admin.routes.js";
 import { flowsRouter } from "./routes/flows.routes.js";
+import { voiceClonesRouter } from "./routes/voice-clones.routes.js";
 
 export function createApp(): Express {
   const app = express();
@@ -17,6 +18,7 @@ export function createApp(): Express {
   app.use("/auth", authRouter);
   app.use("/admin", adminRouter);
   app.use("/flows", flowsRouter);
+  app.use("/voice-clones", voiceClonesRouter);
 
   return app;
 }
