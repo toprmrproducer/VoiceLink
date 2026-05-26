@@ -8,4 +8,5 @@ export * from "./recording.js";
 export * from "./voice-clone.js";
 export * from "./credit.js";
 export * from "./api-key.js";
+export * from "./did.js";
 export * from "./webhooks/index.js";

@@ -31,6 +31,22 @@ const INDEXES: Record<string, IndexDescription[]> = {
     { key: { hash: 1 }, unique: true },
     { key: { tenantId: 1, kind: 1 } },
   ],
+  dids: [
+    // One canonical row per provider number across all tenants — unique.
+    { key: { providerNumber: 1 }, unique: true },
+    // Lookups by tenant (admin "all DIDs for tenant X").
+    { key: { tenantId: 1 } },
+    // Provider+status filter for the admin DID list view.
+    { key: { provider: 1, status: 1 } },
+  ],
+  did_logs: [
+    { key: { providerNumber: 1, at: -1 } },
+    { key: { tenantId: 1, at: -1 } },
+  ],
+  call_events: [
+    { key: { providerCallId: 1, receivedAt: -1 } },
+    { key: { receivedAt: -1 } },
+  ],
 };
 
 export async function connectDb(url: string, dbName?: string): Promise<Db> {
