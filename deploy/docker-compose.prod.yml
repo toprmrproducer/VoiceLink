@@ -48,7 +48,9 @@ services:
   mongo:
     image: mongo:7
     restart: unless-stopped
-    command: ["--auth"]
+    # Mongo is internal-only (not exposed to host or via Caddy). Running
+    # without --auth on the docker network is acceptable for v1; enable
+    # auth + bootstrap a root user before opening to other tenants/VPS.
     volumes:
       - mongo_data:/data/db
 
