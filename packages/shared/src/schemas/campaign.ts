@@ -26,12 +26,24 @@ export const Campaign = z.object({
   _id: z.string(),
   tenantId: z.string(),
   agentId: z.string(),
+  /**
+   * Voicelink DID (E.164) this campaign dials from. Must already be
+   * assigned to the same tenant via `POST /admin/dids/assign` (P2-A).
+   * Optional at "draft" time so a tenant can outline before the DID is
+   * provisioned; required before `/start`.
+   */
+  fromDid: z.string().min(4).max(20).optional(),
   name: z.string().min(1).max(120),
   csvImportRef: z.string().optional(),
   schedule: CampaignSchedule,
   numbers: z.array(CampaignNumber).default([]),
   status: CampaignStatus.default("draft"),
   stats: CampaignStats.default({}),
+  /**
+   * Index in `numbers[]` the next dial picks up. Increments per
+   * originate so resuming a paused campaign continues where it stopped.
+   */
+  cursor: z.number().int().nonnegative().default(0),
   createdAt: z.coerce.date(),
   updatedAt: z.coerce.date(),
 });
@@ -42,7 +54,8 @@ export const CreateCampaignInput = Campaign.omit({
   createdAt: true,
   updatedAt: true,
   stats: true,
-}).partial({ csvImportRef: true, numbers: true, status: true });
+  cursor: true,
+}).partial({ csvImportRef: true, numbers: true, status: true, fromDid: true });
 
 export const UpdateCampaignInput = CreateCampaignInput.partial();
 
