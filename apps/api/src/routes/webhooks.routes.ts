@@ -9,6 +9,7 @@ import {
 import { getDb } from "../db/connection.js";
 import { createLogger } from "../lib/logger.js";
 import { debitForCall, CREDIT_RATE_PER_SEC } from "../credits/ledger.js";
+import { verifyVoicelinkWebhook } from "../adapters/telephony/voicelink/signature.js";
 
 const log = createLogger("webhooks");
 
@@ -37,6 +38,21 @@ webhooksRouter.post("/voicelink", async (req, res) => {
     res.status(400).json({ error: "body must be a JSON object" });
     return;
   }
+
+  // HMAC verification — passthrough until VOICELINK_WEBHOOK_SECRET is
+  // set on VPS-1 (Q2). Fails closed when the secret is configured but
+  // the signature header is missing or wrong.
+  const rawBody = (req as unknown as { rawBody?: Buffer }).rawBody ?? Buffer.from(JSON.stringify(raw));
+  const sigOk = verifyVoicelinkWebhook(req.headers, rawBody, {
+    secret: process.env.VOICELINK_WEBHOOK_SECRET,
+    header: process.env.VOICELINK_WEBHOOK_HEADER,
+  });
+  if (!sigOk) {
+    log.warn({ ip: req.ip }, "rejected webhook: bad signature");
+    res.status(401).json({ error: "invalid signature" });
+    return;
+  }
+
   const parsed = VoicelinkCallEvent.safeParse(raw);
   if (!parsed.success) {
     res

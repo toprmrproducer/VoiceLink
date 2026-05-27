@@ -27,6 +27,7 @@ import type {
 import { VoicelinkClient } from "./client.js";
 import { originateCall as voicelinkOriginate } from "./outbound.js";
 import { registerWebSocketBot as voicelinkRegisterBot } from "./ws-bot.js";
+import { verifyVoicelinkWebhook } from "./signature.js";
 import {
   VoicelinkMockProvider,
   type VoicelinkMockOptions,
@@ -93,16 +94,13 @@ export class VoicelinkProvider implements TelephonyProvider {
   }
 
   verifyWebhook(
-    _headers: IncomingHttpHeaders,
-    _rawBody: Buffer | string,
+    headers: IncomingHttpHeaders,
+    rawBody: Buffer | string,
   ): boolean {
-    // Q2 unresolved. Until Voicelink confirms HMAC/IP-allowlist, we
-    // accept and log a warning. Production gating is at Caddy via
-    // source-IP allow-list.
-    log.warn(
-      "verifyWebhook called with no signature scheme implemented yet (Q2)",
-    );
-    return true;
+    return verifyVoicelinkWebhook(headers, rawBody, {
+      secret: process.env.VOICELINK_WEBHOOK_SECRET,
+      header: process.env.VOICELINK_WEBHOOK_HEADER,
+    });
   }
 }
 

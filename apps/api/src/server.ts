@@ -14,7 +14,18 @@ import { webhooksRouter } from "./routes/webhooks.routes.js";
 export function createApp(): Express {
   const app = express();
   app.use(cors());
-  app.use(express.json({ limit: "10mb" }));
+  // Capture the raw request body before JSON parsing so the Voicelink
+  // webhook receiver can verify its HMAC signature against the exact
+  // bytes the provider signed. Adds <0.1ms per request and is harmless
+  // for routes that don't read it.
+  app.use(
+    express.json({
+      limit: "10mb",
+      verify: (req, _res, buf) => {
+        (req as unknown as { rawBody?: Buffer }).rawBody = Buffer.from(buf);
+      },
+    }),
+  );
 
   app.get("/health", (_req, res) => {
     res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
