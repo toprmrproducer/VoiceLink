@@ -104,6 +104,37 @@ async function seedRegularUser(tenantId: string): Promise<string> {
   });
 }
 
+describe("POST /admin/dids/assign — WS bot registration", () => {
+  it("does NOT set providerBotId when WS_BASE_URL is unset (dev default)", async () => {
+    delete process.env.WS_BASE_URL;
+    const { token, tenantId } = await seedSuperadminAndTenant();
+    await request(app)
+      .post("/admin/dids/assign")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ tenantId, providerNumber: "+919999999999" });
+    const stored = await getDb()
+      .collection("dids")
+      .findOne({ providerNumber: "+919999999999" });
+    expect(stored?.providerBotId).toBeUndefined();
+  });
+
+  it("sets providerBotId when WS_BASE_URL is set and provider returns one", async () => {
+    process.env.WS_BASE_URL = "wss://api.example.com";
+    process.env.VOICELINK_MODE = "mock";
+    const { token, tenantId } = await seedSuperadminAndTenant();
+    await request(app)
+      .post("/admin/dids/assign")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ tenantId, providerNumber: "+919999999998" });
+    const stored = await getDb()
+      .collection("dids")
+      .findOne({ providerNumber: "+919999999998" });
+    expect(typeof stored?.providerBotId).toBe("string");
+    expect(stored?.providerBotId).toMatch(/.+/);
+    delete process.env.WS_BASE_URL;
+  });
+});
+
 describe("POST /admin/dids/assign", () => {
   it("creates a Did row when admin assigns a number to a tenant", async () => {
     const { token, tenantId } = await seedSuperadminAndTenant();

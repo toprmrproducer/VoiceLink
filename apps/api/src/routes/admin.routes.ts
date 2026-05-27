@@ -12,9 +12,52 @@ import { getDb } from "../db/connection.js";
 import { requireAuth } from "../middleware/auth.js";
 import { requireSuperadmin } from "../middleware/superadmin.js";
 import { createLogger } from "../lib/logger.js";
+import { createVoicelinkProvider } from "../adapters/telephony/voicelink/index.js";
+import type { TelephonyProvider } from "../adapters/telephony/types.js";
 
 const log = createLogger("admin");
 export const adminRouter = Router();
+
+/**
+ * Best-effort: register a WS bot with the telephony provider so the
+ * provider knows where to stream audio when calls land on this DID.
+ * Failure here doesn't fail the DID assign — admin can retry by
+ * re-running /admin/dids/assign, and outbound calls work without the
+ * bot (they pass websocketUrl per call). Returns the providerBotId on
+ * success, undefined on failure.
+ */
+async function registerDidBotBestEffort(
+  did: Did,
+  tenant: Tenant,
+): Promise<string | undefined> {
+  const wsBase = process.env.WS_BASE_URL;
+  if (!wsBase) {
+    log.warn({ didId: did._id }, "WS_BASE_URL unset — skipping bot registration");
+    return undefined;
+  }
+  let provider: TelephonyProvider;
+  try {
+    provider = createVoicelinkProvider();
+  } catch (err) {
+    log.warn({ err, didId: did._id }, "telephony provider init failed — skipping bot reg");
+    return undefined;
+  }
+  try {
+    const handle = await provider.registerWebSocketBot({
+      name: `did-${did.providerNumber}`,
+      websocketUrl: `${wsBase}/ws/voicelink/${did._id}`,
+      providerClientId: String(tenant.telephony.providerClientId),
+      active: true,
+    });
+    return handle.providerBotId;
+  } catch (err) {
+    log.warn(
+      { err, didId: did._id, tenantId: did.tenantId },
+      "registerWebSocketBot failed — re-run dids/assign to retry",
+    );
+    return undefined;
+  }
+}
 
 adminRouter.use(requireAuth, requireSuperadmin);
 
@@ -131,6 +174,12 @@ adminRouter.post("/dids/assign", async (req: Request, res: Response) => {
     const patch: Partial<Did> = { updatedAt: now };
     if (didType !== undefined) patch.didType = didType;
     if (defaultAgentId !== undefined) patch.defaultAgentId = defaultAgentId;
+    // Re-register the bot only if it's missing — re-assign without
+    // providerBotId means the original registration failed.
+    if (!existing.providerBotId) {
+      const botId = await registerDidBotBestEffort(existing, tenant);
+      if (botId) patch.providerBotId = botId;
+    }
     await dids.updateOne({ _id: existing._id }, { $set: patch });
     await db.collection("did_logs").insertOne({
       providerNumber,
@@ -159,6 +208,12 @@ adminRouter.post("/dids/assign", async (req: Request, res: Response) => {
     updatedAt: now,
   };
   if (defaultAgentId !== undefined) newDid.defaultAgentId = defaultAgentId;
+  // Register the bot up-front so inbound calls land with the right
+  // WS URL configured on the provider side. Failure is logged + the
+  // DID is still saved without providerBotId; admin retries by
+  // re-running this endpoint.
+  const botId = await registerDidBotBestEffort(newDid, tenant);
+  if (botId) newDid.providerBotId = botId;
   await dids.insertOne(newDid);
   await db.collection("did_logs").insertOne({
     providerNumber,

@@ -1,6 +1,7 @@
 import { createApp } from "./server.js";
 import { connectDb } from "./db/connection.js";
 import { startDialWorker, stopDialWorker } from "./campaign-engine/queue.js";
+import { mountCallWsRouter } from "./voice-engine/ws-router.js";
 import { createLogger } from "./lib/logger.js";
 
 const log = createLogger("main");
@@ -24,6 +25,12 @@ async function start(): Promise<void> {
   const server = app.listen(port, () =>
     log.info({ port }, "@voiceplatform/api listening"),
   );
+
+  // WS upgrade handler for /ws/voicelink/:didId — the entry point for
+  // both inbound calls (Voicelink dials the bot we registered on the
+  // DID) and outbound calls (campaign-engine passes a per-call URL).
+  mountCallWsRouter(server);
+  log.info("ws router mounted at /ws/voicelink/:didId");
 
   // Graceful shutdown so BullMQ flushes in-flight jobs before exit.
   for (const sig of ["SIGINT", "SIGTERM"] as const) {

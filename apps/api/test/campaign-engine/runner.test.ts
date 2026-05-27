@@ -6,6 +6,7 @@ import { ObjectId } from "mongodb";
 import type {
   Call,
   Campaign,
+  Did,
 } from "@voiceplatform/shared";
 
 import {
@@ -53,6 +54,7 @@ let client: MongoClient;
 let db: Db;
 let campaigns: Collection<Campaign>;
 let calls: Collection<Call>;
+let dids: Collection<Did>;
 
 beforeAll(async () => {
   mongo = await MongoMemoryServer.create();
@@ -61,6 +63,7 @@ beforeAll(async () => {
   db = client.db("vp-runner-test");
   campaigns = db.collection<Campaign>("campaigns");
   calls = db.collection<Call>("calls");
+  dids = db.collection<Did>("dids");
 });
 
 afterAll(async () => {
@@ -71,6 +74,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await campaigns.deleteMany({});
   await calls.deleteMany({});
+  await dids.deleteMany({});
 });
 
 const TENANT = "tenant-1";
@@ -126,6 +130,7 @@ describe("dialNextLead", () => {
       telephony: tele,
       campaigns,
       calls,
+      dids,
     });
     expect(result.status).toBe("dialed");
     expect(tele.calls).toHaveLength(1);
@@ -148,6 +153,7 @@ describe("dialNextLead", () => {
       telephony: tele,
       campaigns,
       calls,
+      dids,
     });
     expect(result.status).toBe("no-more-leads");
     expect(tele.calls).toHaveLength(0);
@@ -162,6 +168,7 @@ describe("dialNextLead", () => {
       telephony: tele,
       campaigns,
       calls,
+      dids,
     });
     expect(result.status).toBe("paused");
     expect(tele.calls).toHaveLength(0);
@@ -174,6 +181,7 @@ describe("dialNextLead", () => {
       telephony: tele,
       campaigns,
       calls,
+      dids,
     });
     expect(result.status).toBe("no-did");
     expect(tele.calls).toHaveLength(0);
@@ -187,6 +195,7 @@ describe("dialNextLead", () => {
       telephony: tele,
       campaigns,
       calls,
+      dids,
     });
     expect(result.status).toBe("dialed");
     const callDocs = await calls.find({ campaignId: "c5" }).toArray();
@@ -201,18 +210,77 @@ describe("dialNextLead", () => {
     await seedCampaign({ _id: "c6" });
     const tele = new FakeTelephony();
     await expect(
-      dialNextLead("c6", "wrong-tenant", { telephony: tele, campaigns, calls }),
+      dialNextLead("c6", "wrong-tenant", { telephony: tele, campaigns, calls, dids }),
     ).rejects.toThrow(/not found/);
   });
 
   it("forwards tenantId + agentId + callId in customParameters", async () => {
     await seedCampaign({ _id: "c7" });
     const tele = new FakeTelephony();
-    await dialNextLead("c7", TENANT, { telephony: tele, campaigns, calls });
+    await dialNextLead("c7", TENANT, { telephony: tele, campaigns, calls, dids });
     const params = JSON.parse(tele.calls[0].customParameters ?? "{}");
     expect(params.tenantId).toBe(TENANT);
     expect(params.agentId).toBe("agent-1");
     expect(params.campaignId).toBe("c7");
     expect(typeof params.callId).toBe("string");
+  });
+
+  it("passes per-call websocketUrl when DID is registered + wsBaseUrl is set", async () => {
+    await seedCampaign({ _id: "c8" });
+    await dids.insertOne({
+      _id: "did-8",
+      tenantId: TENANT,
+      provider: "voicelink",
+      providerNumber: "+919999999999",
+      didType: "mobile",
+      status: "active",
+      assignedAt: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    const tele = new FakeTelephony();
+    await dialNextLead("c8", TENANT, {
+      telephony: tele,
+      campaigns,
+      calls,
+      dids,
+      wsBaseUrl: "wss://api.example.com",
+    });
+    const url = tele.calls[0].websocketUrl;
+    expect(url).toMatch(
+      /^wss:\/\/api\.example\.com\/ws\/voicelink\/did-8\?callId=[a-f0-9]+$/,
+    );
+  });
+
+  it("omits websocketUrl when DID row is missing (still dials)", async () => {
+    await seedCampaign({ _id: "c9" });
+    const tele = new FakeTelephony();
+    const result = await dialNextLead("c9", TENANT, {
+      telephony: tele,
+      campaigns,
+      calls,
+      dids,
+      wsBaseUrl: "wss://api.example.com",
+    });
+    expect(result.status).toBe("dialed");
+    expect(tele.calls[0].websocketUrl).toBeUndefined();
+  });
+
+  it("omits websocketUrl when wsBaseUrl is unset (dev/test default)", async () => {
+    await seedCampaign({ _id: "c10" });
+    await dids.insertOne({
+      _id: "did-10",
+      tenantId: TENANT,
+      provider: "voicelink",
+      providerNumber: "+919999999999",
+      didType: "mobile",
+      status: "active",
+      assignedAt: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    const tele = new FakeTelephony();
+    await dialNextLead("c10", TENANT, { telephony: tele, campaigns, calls, dids });
+    expect(tele.calls[0].websocketUrl).toBeUndefined();
   });
 });

@@ -75,6 +75,8 @@ export function startDialWorker(): Worker<DialJobData> | null {
         telephony: createVoicelinkProvider(),
         campaigns: db.collection<Campaign>("campaigns"),
         calls: db.collection<Call>("calls"),
+        dids: db.collection("dids"),
+        wsBaseUrl: process.env.WS_BASE_URL,
       });
       log.info(
         { campaignId, status: result.status, cursor: result.campaign.cursor },

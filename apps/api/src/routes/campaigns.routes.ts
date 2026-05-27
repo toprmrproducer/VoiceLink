@@ -262,6 +262,8 @@ campaignsRouter.post("/:id/dial-now", async (req: Request, res: Response) => {
     telephony: createVoicelinkProvider(),
     campaigns: getDb().collection<Campaign>("campaigns"),
     calls: getDb().collection("calls") as never,
+    dids: getDb().collection("dids"),
+    wsBaseUrl: process.env.WS_BASE_URL,
   });
   res.json({ status: result.status, callId: result.call?._id });
 });

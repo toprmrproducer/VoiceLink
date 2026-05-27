@@ -4,6 +4,7 @@ import type {
   Call,
   Campaign,
   CampaignNumber,
+  Did,
 } from "@voiceplatform/shared";
 
 import type { TelephonyProvider } from "../adapters/telephony/types.js";
@@ -15,6 +16,13 @@ export interface DialNextLeadDeps {
   telephony: TelephonyProvider;
   campaigns: Collection<Campaign>;
   calls: Collection<Call>;
+  dids: Collection<Did>;
+  /**
+   * Base WS URL (e.g. `wss://api.auto4you.in`). Passed per call so the
+   * telephony provider streams audio to the right place. Tests pass a
+   * dummy; prod reads from `WS_BASE_URL` env at the worker setup.
+   */
+  wsBaseUrl?: string;
   /** Override for tests — default is `new Date()` and `new ObjectId()`. */
   now?: () => Date;
   newId?: () => string;
@@ -75,11 +83,29 @@ export async function dialNextLead(
     },
   );
 
+  // Per-call WS URL so Voicelink streams audio to /ws/voicelink/<didId>
+  // with our callId in the query. Looking up the DID row is O(1) on the
+  // (providerNumber, tenantId) compound index.
+  const did = await deps.dids.findOne({
+    providerNumber: campaign.fromDid,
+    tenantId,
+  });
+  let websocketUrl: string | undefined;
+  if (did && deps.wsBaseUrl) {
+    websocketUrl = `${deps.wsBaseUrl}/ws/voicelink/${did._id}?callId=${callId}`;
+  } else if (!did) {
+    log.warn(
+      { fromDid: campaign.fromDid, tenantId },
+      "originate without registered DID row — audio path will not connect",
+    );
+  }
+
   let handle;
   try {
     handle = await deps.telephony.originateCall({
       fromDid: campaign.fromDid,
       toNumber: target.phone,
+      websocketUrl,
       customParameters: JSON.stringify({
         callId,
         campaignId,

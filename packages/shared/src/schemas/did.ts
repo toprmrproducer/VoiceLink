@@ -26,6 +26,13 @@ export const Did = z.object({
   didType: DidType.default("unknown"),
   /** Optional agent to route inbound calls to when no override is supplied. */
   defaultAgentId: z.string().optional(),
+  /**
+   * Provider-side WS bot id (Voicelink `bot_id`), set by
+   * `registerWebSocketBot()` at DID-assign time. The bot's URL is
+   * `${WS_BASE_URL}/ws/voicelink/${did._id}` and is what Voicelink
+   * connects to when a call lands on this number.
+   */
+  providerBotId: z.string().optional(),
   status: DidStatus.default("active"),
   assignedAt: z.coerce.date(),
   createdAt: z.coerce.date(),
