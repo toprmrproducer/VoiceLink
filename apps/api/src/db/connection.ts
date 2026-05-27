@@ -26,7 +26,18 @@ const INDEXES: Record<string, IndexDescription[]> = {
   recordings: [{ key: { callId: 1 } }],
   voice_clones: [{ key: { tenantId: 1 } }],
   credits: [{ key: { tenantId: 1 }, unique: true }],
-  credits_ledger: [{ key: { tenantId: 1, createdAt: -1 } }],
+  credits_ledger: [
+    { key: { tenantId: 1, createdAt: -1 } },
+    // Idempotency: at most one ledger entry per (callId, type) tuple
+    // when callId is set. Lets us safely re-process Voicelink webhook
+    // retries — the second debit insert fails with a duplicate-key
+    // error which the service treats as a no-op.
+    {
+      key: { callId: 1, type: 1 },
+      unique: true,
+      partialFilterExpression: { callId: { $exists: true } },
+    },
+  ],
   api_keys: [
     { key: { hash: 1 }, unique: true },
     { key: { tenantId: 1, kind: 1 } },

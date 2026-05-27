@@ -42,7 +42,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  for (const c of ["calls", "call_events", "dids"]) {
+  for (const c of ["calls", "call_events", "dids", "credits", "credits_ledger"]) {
     await getDb().collection(c).deleteMany({});
   }
 });
@@ -236,5 +236,87 @@ describe("webhook receiver — DID resolution", () => {
       .findOne({ providerCallId: "vl-call-resolve-1" });
     expect(call?.agentId).toBe("agent-default");
     expect(call?.campaignId).toBe("camp-99");
+  });
+});
+
+describe("webhook receiver — credits debit", () => {
+  it("debits the tenant + backfills costCredits on a completed event", async () => {
+    const tenantId = new ObjectId().toString();
+    await seedDid({
+      tenantId,
+      providerNumber: "+919999999999",
+      defaultAgentId: "agent-default",
+    });
+    await getDb().collection("credits").insertOne({
+      _id: tenantId,
+      tenantId,
+      balance: 1000,
+      unit: "minutes",
+      updatedAt: new Date(),
+    });
+    await request(app)
+      .post("/webhooks/voicelink")
+      .send(samplePayload({ duration: 30 }))
+      .expect(200);
+
+    const credits = await getDb()
+      .collection("credits")
+      .findOne({ tenantId });
+    expect(credits?.balance).toBe(970);
+
+    const call = await getDb()
+      .collection("calls")
+      .findOne({ providerCallId: "vl-call-resolve-1" });
+    expect(call?.costCredits).toBe(30);
+
+    const ledger = await getDb()
+      .collection("credits_ledger")
+      .find({ tenantId, type: "call" })
+      .toArray();
+    expect(ledger).toHaveLength(1);
+    expect(ledger[0].amount).toBe(-30);
+  });
+
+  it("is idempotent on webhook redelivery (same providerCallId)", async () => {
+    const tenantId = new ObjectId().toString();
+    await seedDid({
+      tenantId,
+      providerNumber: "+919999999999",
+      defaultAgentId: "agent-default",
+    });
+    await getDb().collection("credits").insertOne({
+      _id: tenantId,
+      tenantId,
+      balance: 1000,
+      unit: "minutes",
+      updatedAt: new Date(),
+    });
+    // Voicelink redelivers the completed event 3 times.
+    for (let i = 0; i < 3; i++) {
+      await request(app)
+        .post("/webhooks/voicelink")
+        .send(samplePayload({ duration: 30 }))
+        .expect(200);
+    }
+    const credits = await getDb().collection("credits").findOne({ tenantId });
+    expect(credits?.balance).toBe(970); // debited once, not three times
+    const ledger = await getDb()
+      .collection("credits_ledger")
+      .find({ tenantId, type: "call" })
+      .toArray();
+    expect(ledger).toHaveLength(1);
+  });
+
+  it("skips debit when tenant is unresolved (DID not assigned yet)", async () => {
+    // No DID seeded → resolver leaves tenantId as "pending"
+    await request(app)
+      .post("/webhooks/voicelink")
+      .send(samplePayload({ duration: 30 }))
+      .expect(200);
+    // No credits or ledger rows touched
+    const credits = await getDb().collection("credits").find({}).toArray();
+    expect(credits).toHaveLength(0);
+    const ledger = await getDb().collection("credits_ledger").find({}).toArray();
+    expect(ledger).toHaveLength(0);
   });
 });

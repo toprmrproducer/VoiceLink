@@ -8,6 +8,7 @@ import {
 
 import { getDb } from "../db/connection.js";
 import { createLogger } from "../lib/logger.js";
+import { debitForCall, CREDIT_RATE_PER_SEC } from "../credits/ledger.js";
 
 const log = createLogger("webhooks");
 
@@ -82,6 +83,45 @@ webhooksRouter.post("/voicelink", async (req, res) => {
     },
     { upsert: true },
   );
+
+  // 4. Debit credits on terminal events — idempotent on (callId, type)
+  //    so Voicelink redelivery of the same completed event is safe.
+  //    Skip if we couldn't resolve the tenant (DID not assigned yet);
+  //    the backfill on /admin/dids/assign already handles those rows.
+  if (
+    (callDoc.set.status === "completed" || callDoc.set.status === "failed") &&
+    resolvedTenantId !== "pending"
+  ) {
+    try {
+      // Use providerCallId as the ledger callId so retries collide on
+      // the same row and we don't double-charge.
+      const result = await debitForCall({
+        tenantId: resolvedTenantId,
+        callId: event.unique_id,
+        durationSec: callDoc.set.durationSec,
+        note: `${callDoc.set.status} via voicelink`,
+      });
+      if (!result.alreadyApplied) {
+        // Backfill costCredits on the call row so reporting shows the
+        // billed amount alongside duration.
+        const cost = Math.max(
+          0,
+          Math.round(callDoc.set.durationSec * CREDIT_RATE_PER_SEC),
+        );
+        await db
+          .collection("calls")
+          .updateOne(
+            { providerCallId: event.unique_id },
+            { $set: { costCredits: cost } },
+          );
+      }
+    } catch (err) {
+      log.warn(
+        { err, providerCallId: event.unique_id, tenantId: resolvedTenantId },
+        "debit failed — call still recorded; reconcile manually",
+      );
+    }
+  }
 
   log.info(
     {

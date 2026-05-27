@@ -14,6 +14,8 @@ import { requireSuperadmin } from "../middleware/superadmin.js";
 import { createLogger } from "../lib/logger.js";
 import { createVoicelinkProvider } from "../adapters/telephony/voicelink/index.js";
 import type { TelephonyProvider } from "../adapters/telephony/types.js";
+import { topUp, getLedgerPage } from "../credits/ledger.js";
+import { TopUpInputSchema } from "./credits.routes.js";
 
 const log = createLogger("admin");
 export const adminRouter = Router();
@@ -240,6 +242,57 @@ adminRouter.post("/dids/assign", async (req: Request, res: Response) => {
  * this DID. tenantId is always set; agentId is updated ONLY when a default
  * was supplied (otherwise pending until the call has explicit agent context).
  */
+// --- Credits (superadmin) ---
+
+/**
+ * POST /admin/credits/topup — add credits to a tenant. Body matches
+ * TopUpInputSchema (tenantId required, amount positive int).
+ */
+adminRouter.post("/credits/topup", async (req: Request, res: Response) => {
+  const parsed = TopUpInputSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res
+      .status(400)
+      .json({ error: "Invalid input", details: parsed.error.flatten() });
+    return;
+  }
+  const tenant = await getDb()
+    .collection<Tenant>("tenants")
+    .findOne({ _id: parsed.data.tenantId });
+  if (!tenant) {
+    res.status(404).json({ error: "tenant not found" });
+    return;
+  }
+  const result = await topUp(parsed.data);
+  log.info(
+    {
+      tenantId: parsed.data.tenantId,
+      amount: parsed.data.amount,
+      type: parsed.data.type,
+      balanceAfter: result.balanceAfter,
+    },
+    "admin credits topup",
+  );
+  res.status(201).json({
+    tenantId: parsed.data.tenantId,
+    balance: result.balanceAfter,
+    ledgerId: result.ledgerId,
+  });
+});
+
+/** GET /admin/credits/:tenantId — balance + last 50 ledger entries. */
+adminRouter.get("/credits/:tenantId", async (req: Request, res: Response) => {
+  const tenant = await getDb()
+    .collection<Tenant>("tenants")
+    .findOne({ _id: req.params.tenantId });
+  if (!tenant) {
+    res.status(404).json({ error: "tenant not found" });
+    return;
+  }
+  const page = await getLedgerPage(req.params.tenantId, 50);
+  res.json(page);
+});
+
 async function backfillPendingCalls(
   providerNumber: string,
   tenantId: string,
