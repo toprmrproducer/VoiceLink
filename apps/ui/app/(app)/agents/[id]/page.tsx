@@ -11,9 +11,7 @@ async function fetchAgent(id: string): Promise<Agent | null> {
     return await api.get<Agent>(`/agents/${id}`);
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) return null;
-    // Agents endpoints are not implemented yet — return a stub so the
-    // editor UI renders empty. Replace once S1+S6 land /agents.
-    return null;
+    throw err;
   }
 }
 

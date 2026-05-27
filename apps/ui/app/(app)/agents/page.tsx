@@ -19,9 +19,7 @@ async function fetchAgents(): Promise<Agent[]> {
     return agents;
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) return [];
-    // /agents not implemented yet (Stream S1+S6 attach to it later); return
-    // an empty list so the page renders rather than a stack trace.
-    return [];
+    throw err;
   }
 }
 

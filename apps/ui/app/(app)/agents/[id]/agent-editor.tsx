@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import type { Agent, RealtimeModel, VoiceProvider } from "@voiceplatform/shared";
 
@@ -22,6 +23,14 @@ interface Props {
   agent: Agent;
 }
 
+interface LibraryVoice {
+  provider: VoiceProvider;
+  providerVoiceId: string;
+  name: string;
+  language?: string;
+  gender?: string;
+}
+
 const VOICE_PROVIDERS: VoiceProvider[] = [
   "openai-realtime",
   "gemini-live",
@@ -38,23 +47,101 @@ const REALTIME_MODELS: RealtimeModel[] = [
 ];
 
 export function AgentEditor({ agent }: Props) {
+  const router = useRouter();
   const [draft, setDraft] = useState<Agent>(agent);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [voices, setVoices] = useState<LibraryVoice[]>([]);
 
   const isNew = agent._id === "new";
 
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/voices", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : { voices: [] }))
+      .then((j: { voices: LibraryVoice[] }) => {
+        if (!cancelled) setVoices(j.voices ?? []);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function buildPayload() {
+    // Strip server-managed fields. _id/tenantId/createdAt/updatedAt are
+    // either set by the server on create or untouchable on update.
+    const { _id, tenantId, createdAt, updatedAt, ...rest } = draft;
+    void _id;
+    void tenantId;
+    void createdAt;
+    void updatedAt;
+    return rest;
+  }
+
   async function save() {
     setSaving(true);
+    setError(null);
     try {
-      // Real save wires through @/lib/api → /agents POST|PUT once Stream S1
-      // delivers the endpoint. For now keep the optimistic local state.
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      const url = isNew ? "/api/agents" : `/api/agents/${draft._id}`;
+      const method = isNew ? "POST" : "PUT";
+      const res = await fetch(url, {
+        method,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(buildPayload()),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(body.error ?? `Save failed (${res.status})`);
+        return;
+      }
+      const saved = body as Agent;
+      setDraft(saved);
       setSavedAt(new Date());
+      if (isNew) {
+        router.replace(`/agents/${saved._id}`);
+        router.refresh();
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Save failed");
     } finally {
       setSaving(false);
     }
   }
+
+  async function remove() {
+    if (isNew) return;
+    if (!confirm(`Delete agent "${draft.name || draft._id}"? This cannot be undone.`)) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/agents/${draft._id}`, { method: "DELETE" });
+      if (res.status === 204) {
+        router.replace("/agents");
+        router.refresh();
+        return;
+      }
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 409 && body.campaigns) {
+        setError(
+          `Cannot delete — ${body.campaigns} active campaign(s) reference this agent. Pause or reassign them first.`,
+        );
+      } else {
+        setError(body.error ?? `Delete failed (${res.status})`);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Delete failed");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  const voicesForProvider = voices.filter(
+    (v) => v.provider === draft.voice.provider,
+  );
+  const usesLibrary = voicesForProvider.length > 0 && draft.voice.provider !== "cloned";
 
   return (
     <div className="max-w-3xl">
@@ -68,16 +155,31 @@ export function AgentEditor({ agent }: Props) {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          {savedAt && (
+          {savedAt && !error && (
             <span className="text-xs text-zinc-500">
               Saved {savedAt.toLocaleTimeString()}
             </span>
           )}
-          <Button onClick={save} disabled={saving}>
+          {!isNew && (
+            <Button
+              variant="destructive"
+              onClick={remove}
+              disabled={deleting || saving}
+            >
+              {deleting ? "Deleting…" : "Delete"}
+            </Button>
+          )}
+          <Button onClick={save} disabled={saving || deleting}>
             {saving ? "Saving…" : isNew ? "Create" : "Save"}
           </Button>
         </div>
       </div>
+
+      {error && (
+        <div className="mb-6 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {error}
+        </div>
+      )}
 
       <div className="mb-6 space-y-1">
         <Label htmlFor="name">Agent name</Label>
@@ -131,12 +233,20 @@ export function AgentEditor({ agent }: Props) {
                 <Label htmlFor="voice-provider">Provider</Label>
                 <Select
                   value={draft.voice.provider}
-                  onValueChange={(value) =>
+                  onValueChange={(value) => {
+                    const provider = value as VoiceProvider;
+                    // When switching providers, preselect the first voice
+                    // from that provider's library so the picker isn't stale.
+                    const first = voices.find((v) => v.provider === provider);
                     setDraft({
                       ...draft,
-                      voice: { ...draft.voice, provider: value as VoiceProvider },
-                    })
-                  }
+                      voice: {
+                        ...draft.voice,
+                        provider,
+                        providerVoiceId: first?.providerVoiceId ?? "",
+                      },
+                    });
+                  }}
                 >
                   <SelectTrigger id="voice-provider">
                     <SelectValue />
@@ -150,23 +260,58 @@ export function AgentEditor({ agent }: Props) {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-1">
-                <Label htmlFor="voice-id">Voice id</Label>
-                <Input
-                  id="voice-id"
-                  value={draft.voice.providerVoiceId}
-                  onChange={(e) =>
-                    setDraft({
-                      ...draft,
-                      voice: { ...draft.voice, providerVoiceId: e.target.value },
-                    })
-                  }
-                  placeholder="e.g. alloy, rachel, custom-clone-id"
-                />
-              </div>
-              <p className="text-xs text-zinc-500">
-                Clone library + audio preview ship with Stream S6.
-              </p>
+
+              {usesLibrary ? (
+                <div className="space-y-1">
+                  <Label htmlFor="voice-id">Voice</Label>
+                  <Select
+                    value={draft.voice.providerVoiceId}
+                    onValueChange={(value) =>
+                      setDraft({
+                        ...draft,
+                        voice: { ...draft.voice, providerVoiceId: value ?? "" },
+                      })
+                    }
+                  >
+                    <SelectTrigger id="voice-id">
+                      <SelectValue placeholder="Pick a voice" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {voicesForProvider.map((v) => (
+                        <SelectItem key={v.providerVoiceId} value={v.providerVoiceId}>
+                          {v.name}
+                          {v.gender ? ` · ${v.gender}` : ""}
+                          {v.language ? ` · ${v.language}` : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  <Label htmlFor="voice-id">Voice id</Label>
+                  <Input
+                    id="voice-id"
+                    value={draft.voice.providerVoiceId}
+                    onChange={(e) =>
+                      setDraft({
+                        ...draft,
+                        voice: { ...draft.voice, providerVoiceId: e.target.value },
+                      })
+                    }
+                    placeholder={
+                      draft.voice.provider === "cloned"
+                        ? "Your cloned voice id"
+                        : "Voice id"
+                    }
+                  />
+                  {draft.voice.provider === "cloned" && (
+                    <p className="text-xs text-zinc-500">
+                      Find cloned voice ids under <strong>Voice clones</strong>.
+                    </p>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
