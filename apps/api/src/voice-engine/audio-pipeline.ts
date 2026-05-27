@@ -82,3 +82,95 @@ export class EnergyVAD {
     this.aboveCount = 0;
   }
 }
+
+// ─────────────────── Resampling ───────────────────
+//
+// Telephony carries 8 kHz audio; OpenAI Realtime + most modern speech
+// models speak 24 kHz PCM16. We stay in PCM16 for both ends and only
+// touch the µ-law encode/decode at the WS boundary, so the resampler
+// only needs to handle PCM16 → PCM16.
+//
+// Linear interpolation is "good enough" at telephony quality. A poly-
+// phase FIR would sound better but adds 2 KB of coefficients and one
+// dependency for ~1 dB of perceptual win — not worth it on G.711.
+
+/**
+ * Upsample 8 kHz PCM16 to 24 kHz PCM16 using linear interpolation.
+ * Output length = input length × 3.
+ */
+export function pcm16Upsample8kTo24k(pcm8k: Buffer): Buffer {
+  const inSamples = pcm8k.length / 2;
+  if (inSamples === 0) return Buffer.alloc(0);
+  const outSamples = inSamples * 3;
+  const out = Buffer.alloc(outSamples * 2);
+
+  for (let i = 0; i < inSamples; i++) {
+    const a = pcm8k.readInt16LE(i * 2);
+    // Use the next sample for interpolation; clamp at the tail.
+    const b = i + 1 < inSamples ? pcm8k.readInt16LE((i + 1) * 2) : a;
+    const baseOut = i * 3;
+    out.writeInt16LE(a, baseOut * 2);
+    out.writeInt16LE(Math.round(a + (b - a) / 3), (baseOut + 1) * 2);
+    out.writeInt16LE(Math.round(a + (2 * (b - a)) / 3), (baseOut + 2) * 2);
+  }
+  return out;
+}
+
+/**
+ * Downsample 24 kHz PCM16 to 8 kHz PCM16 by averaging each group of
+ * three input samples. Acts as a cheap low-pass filter to limit
+ * aliasing at the 4 kHz Nyquist boundary. Output length ≈ input × 1/3.
+ *
+ * Carry-over samples (when input length isn't a multiple of 3) are
+ * appended to the next call's input — set `state` to a fresh
+ * `ResampleState` per call session to preserve continuity across
+ * frames; pass `null` for stateless single-shot use.
+ */
+export interface ResampleState {
+  carry: Buffer;
+}
+
+export function makeResampleState(): ResampleState {
+  return { carry: Buffer.alloc(0) };
+}
+
+export function pcm16Downsample24kTo8k(
+  pcm24k: Buffer,
+  state: ResampleState | null = null,
+): Buffer {
+  const carry = state ? state.carry : Buffer.alloc(0);
+  const buf = carry.length > 0 ? Buffer.concat([carry, pcm24k]) : pcm24k;
+  const inSamples = buf.length / 2;
+  const outSamples = Math.floor(inSamples / 3);
+  const consumed = outSamples * 3;
+  const out = Buffer.alloc(outSamples * 2);
+
+  for (let i = 0; i < outSamples; i++) {
+    const s0 = buf.readInt16LE(i * 3 * 2);
+    const s1 = buf.readInt16LE((i * 3 + 1) * 2);
+    const s2 = buf.readInt16LE((i * 3 + 2) * 2);
+    out.writeInt16LE(Math.round((s0 + s1 + s2) / 3), i * 2);
+  }
+
+  if (state) {
+    // Save unconsumed tail (0, 1, or 2 samples worth of bytes).
+    const remainingBytes = (inSamples - consumed) * 2;
+    state.carry = remainingBytes > 0
+      ? Buffer.from(buf.subarray(buf.length - remainingBytes))
+      : Buffer.alloc(0);
+  }
+  return out;
+}
+
+/** Convenience: µ-law 8 kHz → PCM16 24 kHz. */
+export function mulaw8kToPcm16_24k(mulaw: Buffer): Buffer {
+  return pcm16Upsample8kTo24k(mulawToPcm16(mulaw));
+}
+
+/** Convenience: PCM16 24 kHz → µ-law 8 kHz, with optional state for streaming. */
+export function pcm16_24kToMulaw8k(
+  pcm: Buffer,
+  state: ResampleState | null = null,
+): Buffer {
+  return pcm16ToMulaw(pcm16Downsample24kTo8k(pcm, state));
+}
