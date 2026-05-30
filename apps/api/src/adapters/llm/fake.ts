@@ -58,6 +58,12 @@ export class FakeRealtimeProvider implements RealtimeProvider {
     for (const h of this.errorHandlers) h(err);
   }
 
+  /** Test seam — count cancel() invocations from session-manager. */
+  public cancelCount = 0;
+  cancel(): void {
+    this.cancelCount += 1;
+  }
+
   async close(): Promise<void> {
     this.connected = false;
   }

@@ -93,6 +93,18 @@ export class OpenAiRealtimeProvider implements RealtimeProvider {
   onTurnEnd(h: () => void) { this.turnEndHandlers.push(h); }
   onError(h: (err: Error) => void) { this.errorHandlers.push(h); }
 
+  /**
+   * Cancel any in-flight response. Called when the caller interrupts
+   * (Voicelink barge-in). OpenAI Realtime supports this via the
+   * `response.cancel` client event — the model stops generating
+   * mid-stream and any audio frames already buffered on our side
+   * become stale (the session manager drops them).
+   */
+  cancel(): void {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "response.cancel" }));
+  }
+
   async close(): Promise<void> {
     this.ws?.close();
   }

@@ -41,5 +41,12 @@ export interface RealtimeProvider {
   /** Fires on transport / model errors. */
   onError(handler: (err: Error) => void): void;
 
+  /**
+   * Cancel any in-flight model response. Called when the caller
+   * interrupts (Voicelink fires `{event:"clear"}` for barge-in). Best
+   * effort — providers that don't support cancellation can no-op.
+   */
+  cancel?(): void;
+
   close(): Promise<void>;
 }

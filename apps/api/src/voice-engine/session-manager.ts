@@ -112,6 +112,10 @@ export class CallSession {
         this.cfg.audioFormat === "mulaw8k-pcm16_24k"
           ? pcm16_24kToMulaw8k(frame, this.outboundResample)
           : frame;
+      // Skip empty frames — the resampler can produce 0 bytes when the
+      // provider chunk is smaller than the next group of 3 samples.
+      // Sending {payload:""} would still be valid JSON but is wasteful.
+      if (wireFrame.length === 0) return;
       this.socket.send(
         JSON.stringify({
           event: "media",
@@ -179,6 +183,15 @@ export class CallSession {
       this.cfg.provider.sendAudio(providerFrame);
     } else if (msg.event === "text" && msg.text) {
       this.cfg.provider.sendText(msg.text);
+    } else if (msg.event === "clear") {
+      // Voicelink barge-in: customer interrupted, stop the agent
+      // talking. Cancels any in-flight model response (OpenAI Realtime
+      // supports response.cancel; other providers no-op cleanly).
+      // Also resets the outbound resampler so we don't carry stale
+      // tail samples from the cancelled response into the next one.
+      log.info({ callId: this.cfg.callId }, "clear event — cancelling response");
+      this.cfg.provider.cancel?.();
+      this.outboundResample = makeResampleState();
     } else if (msg.event === "stop") {
       this.close();
     }
