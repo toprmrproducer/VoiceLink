@@ -189,12 +189,20 @@ function startSession(args: {
     }
   };
 
+  // Voicelink (Twilio-compatible) carries µ-law 8 kHz on the WS;
+  // OpenAI Realtime + Gemini Live both speak PCM16 24 kHz. The session
+  // bridges between the two unless we're using the fake provider in
+  // tests (which round-trips bytes for echo).
+  const audioFormat: "passthrough" | "mulaw8k-pcm16_24k" =
+    process.env.REALTIME_MODE === "fake" ? "passthrough" : "mulaw8k-pcm16_24k";
+
   const session = new CallSession(ws, {
     callId,
     provider,
     greeting: agent.greeting,
     waitForStartFrame,
     onStartFrame,
+    audioFormat,
   });
 
   session.start().catch((err) => {

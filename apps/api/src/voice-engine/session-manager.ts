@@ -2,8 +2,29 @@ import type { WebSocket } from "ws";
 
 import type { RealtimeProvider } from "../adapters/llm/types.js";
 import { createLogger } from "../lib/logger.js";
+import {
+  mulaw8kToPcm16_24k,
+  pcm16_24kToMulaw8k,
+  makeResampleState,
+  type ResampleState,
+} from "./audio-pipeline.js";
 
 const log = createLogger("session");
+
+/**
+ * Audio format pairs the session knows how to bridge.
+ *
+ * - `passthrough` (default for tests): no conversion. Whatever bytes
+ *   arrive in `media.payload` are forwarded verbatim to
+ *   `provider.sendAudio()`, and provider audio frames are forwarded
+ *   verbatim back. Used by the echo-bot test + FakeRealtimeProvider.
+ *
+ * - `mulaw8k-pcm16_24k`: telephony carries µ-law 8 kHz; the realtime
+ *   model speaks PCM16 24 kHz (OpenAI Realtime, Gemini Live default).
+ *   Convert at both directions of the boundary. Outbound conversion
+ *   keeps a `ResampleState` so we don't drop samples at frame edges.
+ */
+export type SessionAudioFormat = "passthrough" | "mulaw8k-pcm16_24k";
 
 export interface SessionConfig {
   callId: string;
@@ -24,6 +45,11 @@ export interface SessionConfig {
    * `customParameters` Voicelink round-trips to us.
    */
   onStartFrame?: (info: StartFrameInfo) => void;
+  /**
+   * Audio bridging mode. Defaults to `passthrough` for back-compat with
+   * existing tests; production telephony paths set `mulaw8k-pcm16_24k`.
+   */
+  audioFormat?: SessionAudioFormat;
 }
 
 export interface StartFrameInfo {
@@ -38,21 +64,22 @@ export interface StartFrameInfo {
 /**
  * Owns a single call's WS connection from the telephony side and pumps
  * audio + text to/from a RealtimeProvider. Protocol shape on the
- * telephony side is provider-specific; this session accepts the
- * Twilio-style frame envelope which matches both Twilio (VAPP) and the
- * assumed Voicelink shape (confirm under Q1 once the real Voicelink
- * call lands).
+ * telephony side is the Twilio-style envelope (Voicelink confirmed
+ * compatible 2026-05-28).
  *
  * Frame shapes:
  *   - `{event:"start", start:{callSid, streamSid, customParameters}}`
  *     — first frame, identifies the call.
  *   - `{event:"media", media:{payload: <base64 mulaw>}}` — audio.
  *   - `{event:"text", text}` — out-of-band text inject (tests, tools).
+ *   - `{event:"clear"}` — caller interrupted (barge-in signal).
  *   - `{event:"stop"}` — clean close.
  */
 export class CallSession {
   private startedAt = Date.now();
   private started = false;
+  /** Outbound resampler state — preserved across audio frames. */
+  private outboundResample: ResampleState = makeResampleState();
 
   constructor(
     private socket: WebSocket,
@@ -78,10 +105,17 @@ export class CallSession {
 
     this.cfg.provider.onAudio((frame) => {
       if (this.socket.readyState !== this.socket.OPEN) return;
+      // Convert provider PCM16 24 kHz → telephony µ-law 8 kHz when needed.
+      // Stateful: the resampler holds 0–2 samples between calls so we
+      // don't drop a fraction of a frame at chunk boundaries.
+      const wireFrame =
+        this.cfg.audioFormat === "mulaw8k-pcm16_24k"
+          ? pcm16_24kToMulaw8k(frame, this.outboundResample)
+          : frame;
       this.socket.send(
         JSON.stringify({
           event: "media",
-          media: { payload: frame.toString("base64") },
+          media: { payload: wireFrame.toString("base64") },
         }),
       );
     });
@@ -134,7 +168,15 @@ export class CallSession {
     }
 
     if (msg.event === "media" && msg.media?.payload) {
-      this.cfg.provider.sendAudio(Buffer.from(msg.media.payload, "base64"));
+      const wireFrame = Buffer.from(msg.media.payload, "base64");
+      // Convert telephony µ-law 8 kHz → provider PCM16 24 kHz when needed.
+      // This direction is stateless: every frame upsamples cleanly without
+      // needing to remember tail samples.
+      const providerFrame =
+        this.cfg.audioFormat === "mulaw8k-pcm16_24k"
+          ? mulaw8kToPcm16_24k(wireFrame)
+          : wireFrame;
+      this.cfg.provider.sendAudio(providerFrame);
     } else if (msg.event === "text" && msg.text) {
       this.cfg.provider.sendText(msg.text);
     } else if (msg.event === "stop") {
