@@ -34,5 +34,8 @@ COPY --from=build /repo/apps/ui/.next/static     ./apps/ui/.next/static
 COPY --from=build /repo/apps/ui/public           ./apps/ui/public
 
 EXPOSE 3000
-HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://localhost:3000/ >/dev/null || exit 1
+# Use 127.0.0.1 explicitly: Next.js standalone binds IPv4 only, but Alpine's
+# `localhost` resolves to ::1 (IPv6) first, which fails with "connection
+# refused". Using 127.0.0.1 makes the healthcheck deterministic.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s CMD wget -qO- http://127.0.0.1:3000/ >/dev/null || exit 1
 CMD ["node", "apps/ui/server.js"]
