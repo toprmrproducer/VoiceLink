@@ -6,9 +6,13 @@ import type { Filter, Document } from "mongodb";
  * Require the request to belong to a tenant. Stores the scoped tenantId
  * on `req.tenantId` for downstream handlers.
  *
- * Superadmin users may pass `?tenantId=<id>` to act on behalf of a tenant.
- * If they don't, they are still allowed through (`req.tenantId = null`) and
- * the handler is expected to either operate platform-wide or return 400.
+ * Superadmin users MUST pass `?tenantId=<id>` to act on behalf of a
+ * tenant when hitting a tenant-scoped route — without it we return 400.
+ * (Previously we let SAs through with `req.tenantId = null` and let the
+ * handler decide, which crashed `tenantScope()` with an unhandled throw.)
+ *
+ * Cross-tenant admin reads still work through the dedicated `/admin/*`
+ * routes which use `requireSuperadmin` directly.
  */
 export function requireTenant(req: Request, res: Response, next: NextFunction): void {
   if (!req.user) {
@@ -18,7 +22,14 @@ export function requireTenant(req: Request, res: Response, next: NextFunction): 
 
   if (req.user.isSuperadmin) {
     const override = req.query.tenantId;
-    req.tenantId = typeof override === "string" ? override : null;
+    if (typeof override !== "string" || override.length === 0) {
+      res.status(400).json({
+        error:
+          "Superadmin must pass ?tenantId=<id> on tenant-scoped routes. Use /admin/* for cross-tenant operations.",
+      });
+      return;
+    }
+    req.tenantId = override;
     next();
     return;
   }

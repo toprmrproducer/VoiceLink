@@ -3,7 +3,7 @@ import Link from "next/link";
 import type { Tenant } from "@voiceplatform/shared";
 
 import { api, ApiError } from "@/lib/api";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Table,
   TableBody,
@@ -12,6 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { pickTenant } from "@/lib/act-as-tenant";
 
 async function fetchTenants(): Promise<Tenant[]> {
   try {
@@ -47,6 +48,7 @@ export default async function TenantsPage() {
               <TableHead>Status</TableHead>
               <TableHead>Voicelink client</TableHead>
               <TableHead>Created</TableHead>
+              <TableHead className="text-right">Open</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -58,6 +60,18 @@ export default async function TenantsPage() {
                 <TableCell>{t.telephony.providerClientId}</TableCell>
                 <TableCell>
                   {new Date(t.createdAt).toLocaleDateString()}
+                </TableCell>
+                <TableCell className="text-right">
+                  <form
+                    action={async () => {
+                      "use server";
+                      await pickTenant(t._id, "/dashboard");
+                    }}
+                  >
+                    <Button type="submit" size="sm" variant="outline">
+                      Open as tenant
+                    </Button>
+                  </form>
                 </TableCell>
               </TableRow>
             ))}

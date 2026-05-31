@@ -10,6 +10,15 @@ const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:4000";
 
 const SESSION_COOKIE = "vp_session";
+/**
+ * Sticky tenant override for superadmins. When set, every authedFetch
+ * call appends `?tenantId=<value>` so the SA acts as that tenant on
+ * tenant-scoped routes without having to thread the param through
+ * every page. Cookie is set by `pickTenant()` (server action) and
+ * cleared by `clearTenant()`. Ignored entirely for non-SA users —
+ * their token already carries their tenantId.
+ */
+const ACT_AS_TENANT_COOKIE = "vp_act_as_tenant";
 
 export class ApiError extends Error {
   constructor(
@@ -22,16 +31,30 @@ export class ApiError extends Error {
   }
 }
 
+/** Append `?tenantId=...` (or `&tenantId=...`) when we have an act-as cookie. */
+function withTenant(path: string, tenantId: string | undefined): string {
+  if (!tenantId) return path;
+  // Already has ?tenantId=? Don't override.
+  if (/[?&]tenantId=/.test(path)) return path;
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}tenantId=${encodeURIComponent(tenantId)}`;
+}
+
 async function authedFetch(
   path: string,
   init: RequestInit = {},
 ): Promise<Response> {
   const jar = await cookies();
   const token = jar.get(SESSION_COOKIE)?.value;
+  const actAs = jar.get(ACT_AS_TENANT_COOKIE)?.value;
   const headers = new Headers(init.headers);
   headers.set("content-type", "application/json");
   if (token) headers.set("authorization", `Bearer ${token}`);
-  return fetch(`${API_BASE}${path}`, { ...init, headers, cache: "no-store" });
+  return fetch(`${API_BASE}${withTenant(path, actAs)}`, {
+    ...init,
+    headers,
+    cache: "no-store",
+  });
 }
 
 async function unwrap<T>(res: Response): Promise<T> {
@@ -66,4 +89,4 @@ export const api = {
     authedFetch(path, { method: "DELETE" }).then(unwrap<T>),
 };
 
-export { SESSION_COOKIE, API_BASE };
+export { SESSION_COOKIE, ACT_AS_TENANT_COOKIE, API_BASE };
