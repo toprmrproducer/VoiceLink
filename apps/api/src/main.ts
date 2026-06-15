@@ -1,3 +1,5 @@
+import "dotenv/config";
+
 import { createApp } from "./server.js";
 import { connectDb } from "./db/connection.js";
 import { startDialWorker, stopDialWorker } from "./campaign-engine/queue.js";

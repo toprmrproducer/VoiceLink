@@ -162,6 +162,31 @@ export function pcm16Downsample24kTo8k(
   return out;
 }
 
+/**
+ * Generic linear-interpolation resampler for PCM16 mono. Used by the
+ * Gemini Live provider, which takes 16 kHz input but the telephony
+ * bridge produces 24 kHz (and Gemini speaks 24 kHz back, which the
+ * bridge already expects). Stateless per-buffer; the small
+ * discontinuity at 20 ms frame edges is inaudible at telephony quality.
+ */
+export function pcm16Resample(pcm: Buffer, inRate: number, outRate: number): Buffer {
+  const inSamples = pcm.length / 2;
+  if (inSamples === 0 || inRate === outRate) return pcm;
+  const outSamples = Math.max(1, Math.round((inSamples * outRate) / inRate));
+  const out = Buffer.alloc(outSamples * 2);
+  const step = outSamples > 1 ? (inSamples - 1) / (outSamples - 1) : 0;
+  for (let j = 0; j < outSamples; j++) {
+    const pos = j * step;
+    const i0 = Math.floor(pos);
+    const i1 = Math.min(i0 + 1, inSamples - 1);
+    const frac = pos - i0;
+    const s0 = pcm.readInt16LE(i0 * 2);
+    const s1 = pcm.readInt16LE(i1 * 2);
+    out.writeInt16LE(Math.round(s0 + (s1 - s0) * frac), j * 2);
+  }
+  return out;
+}
+
 /** Convenience: µ-law 8 kHz → PCM16 24 kHz. */
 export function mulaw8kToPcm16_24k(mulaw: Buffer): Buffer {
   return pcm16Upsample8kTo24k(mulawToPcm16(mulaw));

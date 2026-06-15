@@ -50,8 +50,8 @@ export async function Sidebar({ isSuperadmin, className }: Props) {
         className,
       )}
     >
-      <div className="px-2 py-1 text-sm font-semibold tracking-tight">
-        voice-platform
+      <div className="px-2 py-1 text-base font-bold tracking-tight">
+        RapidX<span className="text-blue-600"> AI</span>
       </div>
       <ul className="mt-4 space-y-1">
         {NAV.map((item) => (

@@ -15,8 +15,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "voice-platform",
-  description: "Multi-tenant voice AI platform",
+  title: "RapidX AI",
+  description: "RapidX AI — AI voice agents for inbound and outbound calls",
 };
 
 export default function RootLayout({

@@ -9,7 +9,10 @@ export default function LoginPage() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Sign in</CardTitle>
+        <CardTitle className="text-2xl font-bold tracking-tight">
+          RapidX<span className="text-blue-600"> AI</span>
+        </CardTitle>
+        <p className="text-sm text-zinc-500">Sign in to your voice agent dashboard</p>
       </CardHeader>
       <CardContent className="space-y-4">
         <LoginForm />

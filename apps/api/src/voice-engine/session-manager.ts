@@ -78,6 +78,8 @@ export interface StartFrameInfo {
 export class CallSession {
   private startedAt = Date.now();
   private started = false;
+  /** Diagnostic: count of inbound telephony frames seen, for live debugging. */
+  private framesIn = 0;
   /** Outbound resampler state — preserved across audio frames. */
   private outboundResample: ResampleState = makeResampleState();
 
@@ -146,7 +148,26 @@ export class CallSession {
     try {
       msg = JSON.parse(raw);
     } catch {
+      // Non-JSON frame — log a sample so we can see if VoiceLink sends
+      // raw binary/base64 audio instead of the Twilio JSON envelope.
+      if (this.framesIn < 5) {
+        log.warn(
+          { callId: this.cfg.callId, sample: raw.slice(0, 80), len: raw.length },
+          "non-JSON telephony frame",
+        );
+      }
+      this.framesIn++;
       return;
+    }
+
+    // Live diagnostic: log the first few frames + any unrecognized event so
+    // the real VoiceLink call reveals its exact protocol shape.
+    this.framesIn++;
+    if (this.framesIn <= 5) {
+      log.info(
+        { callId: this.cfg.callId, event: msg.event, keys: Object.keys(msg) },
+        "telephony frame",
+      );
     }
 
     if (msg.event === "start") {

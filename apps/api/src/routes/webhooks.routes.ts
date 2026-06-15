@@ -34,8 +34,68 @@ export const webhooksRouter = Router();
  */
 webhooksRouter.post("/voicelink", async (req, res) => {
   const raw = req.body;
+  // DIAGNOSTIC: log the exact payload VoiceLink sends so we can see call
+  // outcomes (failed/busy/no-answer + reason) and field names.
+  log.info({ rawVoicelinkWebhook: raw }, "raw voicelink webhook payload");
   if (raw == null || typeof raw !== "object" || Array.isArray(raw)) {
     res.status(400).json({ error: "body must be a JSON object" });
+    return;
+  }
+
+  // VoiceLink's real webhook (2026) sends { event: "call.*", call: {...} }
+  // which differs from the repo's legacy schema. Handle it natively:
+  // record every lifecycle event + the call row, and ALWAYS return 200 so
+  // VoiceLink doesn't retry.
+  const evt = raw as {
+    event?: unknown;
+    call?: {
+      id?: string;
+      direction?: string;
+      from?: string;
+      to?: string;
+      status?: string;
+      hangupCause?: string | null;
+      durationSec?: number | null;
+      ringDurationSec?: number | null;
+    };
+  };
+  if (typeof evt.event === "string" && evt.call && typeof evt.call === "object") {
+    const c = evt.call;
+    const now = new Date();
+    const db = getDb();
+    const direction: "in" | "out" = c.direction === "outbound" ? "out" : "in";
+    const ourDid = direction === "out" ? String(c.from ?? "") : String(c.to ?? "");
+    const did = await db.collection<Did>("dids").findOne({ providerNumber: ourDid });
+    const statusMap: Record<string, "queued" | "ringing" | "inprogress" | "completed" | "failed"> = {
+      initiated: "queued", ringing: "ringing", answered: "inprogress",
+      "in-progress": "inprogress", completed: "completed",
+      failed: "failed", "no-answer": "failed", busy: "failed", canceled: "failed",
+    };
+    const status = statusMap[String(c.status)] ?? "ringing";
+    await db.collection("call_events").insertOne({
+      providerCallId: c.id, eventType: String(evt.event), callStatus: c.status ?? null,
+      hangupCause: c.hangupCause ?? null, receivedAt: now, rawPayload: raw as Record<string, unknown>,
+    });
+    await db.collection("calls").updateOne(
+      { providerCallId: c.id },
+      {
+        $set: {
+          direction, fromNumber: String(c.from ?? ""), toNumber: String(c.to ?? ""),
+          status, durationSec: c.durationSec ?? 0, updatedAt: now,
+        },
+        $setOnInsert: {
+          providerCallId: c.id, tenantId: did?.tenantId ?? "pending",
+          agentId: did?.defaultAgentId ?? "pending", createdAt: now,
+          sentiment: "unknown", costCredits: 0, costCogs: 0,
+        },
+      },
+      { upsert: true },
+    );
+    log.info(
+      { providerCallId: c.id, event: evt.event, status, hangupCause: c.hangupCause ?? null },
+      "voicelink webhook (v2) recorded",
+    );
+    res.status(200).json({ received: true });
     return;
   }
 
