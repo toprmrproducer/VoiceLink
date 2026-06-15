@@ -5,6 +5,8 @@ import { createLogger } from "../lib/logger.js";
 import {
   mulaw8kToPcm16_24k,
   pcm16_24kToMulaw8k,
+  alaw8kToPcm16_24k,
+  pcm16_24kToAlaw8k,
   makeResampleState,
   type ResampleState,
 } from "./audio-pipeline.js";
@@ -80,8 +82,30 @@ export class CallSession {
   private started = false;
   /** Diagnostic: count of inbound telephony frames seen, for live debugging. */
   private framesIn = 0;
+  /**
+   * Telephony companding codec, learned from the start frame's
+   * `media_format.encoding`. VoiceLink = "audio/alaw"; Twilio = µ-law.
+   * Default to A-law since that's what VoiceLink (our provider) sends.
+   */
+  private telephonyEncoding = "audio/alaw";
   /** Outbound resampler state — preserved across audio frames. */
   private outboundResample: ResampleState = makeResampleState();
+
+  /** Telephony bytes (8 kHz companded) → provider PCM16 24 kHz. */
+  private telephonyToProvider(wire: Buffer): Buffer {
+    if (this.cfg.audioFormat !== "mulaw8k-pcm16_24k") return wire; // passthrough/fake
+    return this.telephonyEncoding.includes("mulaw") || this.telephonyEncoding.includes("pcmu")
+      ? mulaw8kToPcm16_24k(wire)
+      : alaw8kToPcm16_24k(wire);
+  }
+
+  /** Provider PCM16 24 kHz → telephony bytes (8 kHz companded). */
+  private providerToTelephony(frame: Buffer): Buffer {
+    if (this.cfg.audioFormat !== "mulaw8k-pcm16_24k") return frame; // passthrough/fake
+    return this.telephonyEncoding.includes("mulaw") || this.telephonyEncoding.includes("pcmu")
+      ? pcm16_24kToMulaw8k(frame, this.outboundResample)
+      : pcm16_24kToAlaw8k(frame, this.outboundResample);
+  }
 
   constructor(
     private socket: WebSocket,
@@ -110,10 +134,7 @@ export class CallSession {
       // Convert provider PCM16 24 kHz → telephony µ-law 8 kHz when needed.
       // Stateful: the resampler holds 0–2 samples between calls so we
       // don't drop a fraction of a frame at chunk boundaries.
-      const wireFrame =
-        this.cfg.audioFormat === "mulaw8k-pcm16_24k"
-          ? pcm16_24kToMulaw8k(frame, this.outboundResample)
-          : frame;
+      const wireFrame = this.providerToTelephony(frame);
       // Skip empty frames — the resampler can produce 0 bytes when the
       // provider chunk is smaller than the next group of 3 samples.
       // Sending {payload:""} would still be valid JSON but is wasteful.
@@ -171,11 +192,25 @@ export class CallSession {
     }
 
     if (msg.event === "start") {
+      // Learn the real telephony codec from the provider's declared format.
+      const start = msg.start as Record<string, unknown> | undefined;
+      const mf = start?.media_format as { encoding?: string; sample_rate?: string } | undefined;
+      if (mf?.encoding) {
+        this.telephonyEncoding = String(mf.encoding).toLowerCase();
+        log.info(
+          { callId: this.cfg.callId, encoding: this.telephonyEncoding, sampleRate: mf.sample_rate },
+          "telephony media format detected",
+        );
+      }
       if (this.cfg.onStartFrame) {
+        // VoiceLink uses snake_case (call_sid/stream_sid/custom_parameters);
+        // Twilio uses camelCase. Accept both.
         this.cfg.onStartFrame({
-          providerCallId: msg.start?.callSid,
-          streamSid: msg.start?.streamSid,
-          customParameters: msg.start?.customParameters,
+          providerCallId: (start?.call_sid as string) ?? msg.start?.callSid,
+          streamSid: (start?.stream_sid as string) ?? msg.start?.streamSid,
+          customParameters:
+            (start?.custom_parameters as Record<string, string>) ??
+            msg.start?.customParameters,
         });
       }
       // Boot the realtime provider now if we were waiting for identity.
@@ -194,14 +229,7 @@ export class CallSession {
 
     if (msg.event === "media" && msg.media?.payload) {
       const wireFrame = Buffer.from(msg.media.payload, "base64");
-      // Convert telephony µ-law 8 kHz → provider PCM16 24 kHz when needed.
-      // This direction is stateless: every frame upsamples cleanly without
-      // needing to remember tail samples.
-      const providerFrame =
-        this.cfg.audioFormat === "mulaw8k-pcm16_24k"
-          ? mulaw8kToPcm16_24k(wireFrame)
-          : wireFrame;
-      this.cfg.provider.sendAudio(providerFrame);
+      this.cfg.provider.sendAudio(this.telephonyToProvider(wireFrame));
     } else if (msg.event === "text" && msg.text) {
       this.cfg.provider.sendText(msg.text);
     } else if (msg.event === "clear") {

@@ -37,6 +37,7 @@ export class GeminiLiveProvider implements RealtimeProvider {
   private textHandlers: ((delta: string) => void)[] = [];
   private turnEndHandlers: (() => void)[] = [];
   private errorHandlers: ((err: Error) => void)[] = [];
+  private outFrames = 0;
 
   constructor(private cfg: RealtimeProviderConfig) {}
 
@@ -86,7 +87,11 @@ export class GeminiLiveProvider implements RealtimeProvider {
     for (const part of parts) {
       const inline = part.inlineData;
       if (inline?.data && (inline.mimeType ?? "").startsWith("audio/")) {
-        const frame = Buffer.from(inline.data, "base64"); // PCM16 24 kHz
+        const frame = Buffer.from(inline.data, "base64"); // PCM16, rate per mimeType
+        if (this.outFrames < 3) {
+          log.info({ mimeType: inline.mimeType, bytes: frame.length }, "gemini output audio frame");
+          this.outFrames++;
+        }
         for (const h of this.audioHandlers) h(frame);
       }
       if (typeof part.text === "string" && part.text.length > 0) {

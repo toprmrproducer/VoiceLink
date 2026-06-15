@@ -187,6 +187,67 @@ export function pcm16Resample(pcm: Buffer, inRate: number, outRate: number): Buf
   return out;
 }
 
+// ─────────────────── G.711 A-law (ITU-T) ───────────────────
+//
+// VoiceLink (and most of EU/Asia/India telephony) uses A-law, NOT µ-law.
+// Encoding the wrong companding curve turns every sample into noise — the
+// "radio static" symptom. Standard Sun g711.c port.
+
+const ALAW_SEG_END = [0x1f, 0x3f, 0x7f, 0xff, 0x1ff, 0x3ff, 0x7ff, 0xfff];
+
+export function alawEncodeSample(pcm: number): number {
+  let val = pcm >> 3; // 16-bit linear → 13-bit
+  let mask: number;
+  if (val >= 0) {
+    mask = 0xd5;
+  } else {
+    mask = 0x55;
+    val = -val - 1;
+    if (val < 0) val = 0;
+  }
+  let seg = 8;
+  for (let i = 0; i < 8; i++) {
+    if (val <= ALAW_SEG_END[i]) { seg = i; break; }
+  }
+  if (seg >= 8) return (0x7f ^ mask) & 0xff;
+  let aval = seg << 4;
+  aval |= seg < 2 ? (val >> 1) & 0x0f : (val >> seg) & 0x0f;
+  return (aval ^ mask) & 0xff;
+}
+
+export function alawDecodeSample(aval: number): number {
+  aval ^= 0x55;
+  let t = (aval & 0x0f) << 4;
+  const seg = (aval & 0x70) >> 4;
+  if (seg === 0) t += 8;
+  else if (seg === 1) t += 0x108;
+  else { t += 0x108; t <<= seg - 1; }
+  return aval & 0x80 ? t : -t;
+}
+
+export function alawToPcm16(alaw: Buffer): Buffer {
+  const out = Buffer.alloc(alaw.length * 2);
+  for (let i = 0; i < alaw.length; i++) out.writeInt16LE(alawDecodeSample(alaw[i]), i * 2);
+  return out;
+}
+
+export function pcm16ToAlaw(pcm: Buffer): Buffer {
+  const samples = pcm.length / 2;
+  const out = Buffer.alloc(samples);
+  for (let i = 0; i < samples; i++) out[i] = alawEncodeSample(pcm.readInt16LE(i * 2));
+  return out;
+}
+
+/** Convenience: A-law 8 kHz → PCM16 24 kHz. */
+export function alaw8kToPcm16_24k(alaw: Buffer): Buffer {
+  return pcm16Upsample8kTo24k(alawToPcm16(alaw));
+}
+
+/** Convenience: PCM16 24 kHz → A-law 8 kHz, with optional streaming state. */
+export function pcm16_24kToAlaw8k(pcm: Buffer, state: ResampleState | null = null): Buffer {
+  return pcm16ToAlaw(pcm16Downsample24kTo8k(pcm, state));
+}
+
 /** Convenience: µ-law 8 kHz → PCM16 24 kHz. */
 export function mulaw8kToPcm16_24k(mulaw: Buffer): Buffer {
   return pcm16Upsample8kTo24k(mulawToPcm16(mulaw));
