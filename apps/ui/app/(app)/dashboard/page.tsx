@@ -1,5 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
+import { PlaceCall } from "./place-call";
+
 export default function DashboardPage() {
   return (
     <div>
@@ -30,6 +32,7 @@ export default function DashboardPage() {
           <CardContent className="text-3xl font-semibold">—</CardContent>
         </Card>
       </div>
+      <PlaceCall />
       <p className="mt-8 text-sm text-zinc-500">
         Live metrics arrive once Stream S1 ships the calls/campaign data.
       </p>

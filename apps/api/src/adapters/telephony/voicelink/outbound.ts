@@ -25,7 +25,12 @@ interface AddLeadResponse {
   /** Some endpoints return `call_id` instead. */
   call_id?: string;
   /** Generic data envelope; some Voicelink endpoints wrap responses. */
-  data?: { unique_id?: string; call_id?: string };
+  data?: {
+    unique_id?: string;
+    call_id?: string;
+    /** Live VoiceLink returns the queued-call id here (verified 2026-06-15). */
+    outbound_queue_id?: number | string;
+  };
 }
 
 /**
@@ -66,15 +71,16 @@ export async function originateCall(
   if (input.callLimit !== undefined) body.call_limit = input.callLimit;
 
   const res = await client.request<AddLeadResponse>("POST", "/v1/add_lead", body);
-  const providerCallId =
+  const rawId =
     res.unique_id ??
     res.call_id ??
     res.data?.unique_id ??
-    res.data?.call_id;
-  if (!providerCallId) {
+    res.data?.call_id ??
+    res.data?.outbound_queue_id;
+  if (rawId === undefined || rawId === null) {
     throw new Error(
-      `add_lead succeeded but no unique_id/call_id in response: ${JSON.stringify(res)}`,
+      `add_lead succeeded but no call id in response: ${JSON.stringify(res)}`,
     );
   }
-  return { providerCallId, acceptedAt: new Date() };
+  return { providerCallId: String(rawId), acceptedAt: new Date() };
 }
