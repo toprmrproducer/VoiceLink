@@ -90,4 +90,19 @@ Inbound needs a free concurrent channel on your VoiceLink plan.
 - The public link is a cloudflared quick tunnel tied to your machine. For
   production, deploy the API to a server with a stable domain and re-register the bots.
 
+## Deploy to production (permanent URL, no tunnel)
+Local + cloudflared is fine for a demo, but the tunnel dies with your laptop. For a
+24/7 deployment with a stable `wss://` URL, use the `deploy/` assets (VPS + Docker +
+Caddy auto-HTTPS + Mongo + Redis):
+1. A VPS (any provider) and a domain with DNS A records pointing to it.
+2. Run `deploy/vps-bootstrap.sh` on the VPS (installs Docker).
+3. Edit `deploy/Caddyfile` to your domains (e.g. `app.you.com` -> ui, `api.you.com` ->
+   api/ws). Caddy issues HTTPS automatically.
+4. Build the `apps/api` + `apps/ui` Docker images, drop `.env.api` / `.env.ui` next to
+   `deploy/docker-compose.prod.yml`, and `docker compose -f deploy/docker-compose.prod.yml up -d`.
+5. Set `WS_BASE_URL=wss://<your api/ws domain>`, then run `scripts/setup-voicelink.ts`
+   and `scripts/seed.ts` against the deployed stack so the bots point at the live URL.
+
+After that, the dashboard "Place a call" works from anywhere, with your laptop off.
+
 Full architecture + every VoiceLink endpoint used is documented in [CLAUDE.md](./CLAUDE.md).
