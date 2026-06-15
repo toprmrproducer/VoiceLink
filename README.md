@@ -10,11 +10,31 @@ voice agent over a real phone call, and place calls right from the UI.
 
 | Credential | Where to get it | Goes in |
 |---|---|---|
-| `GEMINI_API_KEY` | aistudio.google.com (API key) | `apps/api/.env` |
-| `VOICELINK_RESELLER_TOKEN` | Your VoiceLink reseller account (Sanctum API token) | `apps/api/.env` |
+| `GEMINI_API_KEY` | aistudio.google.com → Get API key | `apps/api/.env` |
+| VoiceLink Bearer token | See below (you mint it from your VoiceLink login) | `apps/api/.env` |
 
 You also need a VoiceLink account with at least one DID and one channel, and
 `cloudflared` (free) so VoiceLink's cloud can reach your machine.
+
+### Where the VoiceLink token comes from
+It is a VoiceLink account Bearer token, format `1234|longhash`. It is **not** shown on
+a settings page, you mint it by logging in to the API. Two options:
+
+- **Easiest (recommended):** put your VoiceLink account login in `apps/api/.env`:
+  `VOICELINK_RESELLER_USERNAME=<your VoiceLink username/email>` and
+  `VOICELINK_RESELLER_PASSWORD=<your password>`, leave `VOICELINK_RESELLER_TOKEN` blank.
+  The app logs in via `POST /v1/auth/login` and gets the token automatically (and
+  refreshes it when it expires).
+- **Or mint it once yourself** and paste it as `VOICELINK_RESELLER_TOKEN`:
+  ```bash
+  curl -s -X POST https://app.voicelink.co.in/api/v1/auth/login \
+    -H "Content-Type: application/json" \
+    -d '{"username":"YOUR_VOICELINK_USERNAME","password":"YOUR_VOICELINK_PASSWORD"}'
+  # copy data.access_token from the response
+  ```
+
+No SIP host, LiveKit URL, or trunk credentials are needed. The app uses VoiceLink's
+WebSocket Bot path, which `scripts/setup-voicelink.ts` wires up with just the token.
 
 ## Quick start
 
