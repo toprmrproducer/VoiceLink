@@ -90,6 +90,25 @@ export class CallSession {
   private telephonyEncoding = "audio/alaw";
   /** Outbound resampler state — preserved across audio frames. */
   private outboundResample: ResampleState = makeResampleState();
+  /**
+   * Outbound jitter buffer of companded 8 kHz telephony bytes. The provider
+   * delivers audio in bursts; VoiceLink expects a steady 20 ms frame cadence
+   * and tears down the bot leg (cause 32) if media stops. We enqueue here and
+   * a 20 ms pacer drains exactly one 20 ms frame per tick, sending silence
+   * when the agent isn't speaking so the leg never goes idle.
+   */
+  private outQueue: Buffer = Buffer.alloc(0);
+  private paceTimer?: ReturnType<typeof setInterval>;
+  /** Streaming session id echoed back to VoiceLink on outbound media. */
+  private streamSid?: string;
+  /** Bytes per 20 ms frame at 8 kHz: µ-law/A-law = 1 byte/sample = 160. */
+  private static readonly FRAME_BYTES = 160;
+  /** A-law digital silence is 0xD5; µ-law is 0xFF. */
+  private silenceByte(): number {
+    return this.telephonyEncoding.includes("mulaw") || this.telephonyEncoding.includes("pcmu")
+      ? 0xff
+      : 0xd5;
+  }
 
   /** Telephony bytes (8 kHz companded) → provider PCM16 24 kHz. */
   private telephonyToProvider(wire: Buffer): Buffer {
@@ -114,7 +133,13 @@ export class CallSession {
 
   async start(): Promise<void> {
     this.socket.on("message", (raw) => this.onMessage(raw.toString()));
-    this.socket.on("close", () => this.close());
+    this.socket.on("close", (code: number, reason: Buffer) => {
+      log.info(
+        { callId: this.cfg.callId, code, reason: reason?.toString() || undefined },
+        "telephony socket closed",
+      );
+      this.close();
+    });
     this.socket.on("error", (err) => {
       log.warn({ callId: this.cfg.callId, err }, "socket error");
     });
@@ -130,29 +155,51 @@ export class CallSession {
     await this.cfg.provider.connect();
 
     this.cfg.provider.onAudio((frame) => {
-      if (this.socket.readyState !== this.socket.OPEN) return;
-      // Convert provider PCM16 24 kHz → telephony µ-law 8 kHz when needed.
-      // Stateful: the resampler holds 0–2 samples between calls so we
-      // don't drop a fraction of a frame at chunk boundaries.
+      // Convert provider PCM16 24 kHz → telephony companded 8 kHz, then
+      // ENQUEUE it. The pacer drains it at a steady 20 ms cadence. Stateful
+      // resampler holds 0–2 samples between calls so we don't drop a
+      // fraction of a frame at chunk boundaries.
       const wireFrame = this.providerToTelephony(frame);
-      // Skip empty frames — the resampler can produce 0 bytes when the
-      // provider chunk is smaller than the next group of 3 samples.
-      // Sending {payload:""} would still be valid JSON but is wasteful.
       if (wireFrame.length === 0) return;
-      this.socket.send(
-        JSON.stringify({
-          event: "media",
-          media: { payload: wireFrame.toString("base64") },
-        }),
-      );
+      this.outQueue = Buffer.concat([this.outQueue, wireFrame]);
     });
     this.cfg.provider.onError((err) => {
       log.error({ callId: this.cfg.callId, err }, "provider error");
     });
 
+    // Start the 20 ms outbound pacer: keeps a continuous media stream to
+    // VoiceLink (real audio when the agent speaks, silence otherwise) so the
+    // bot leg is never torn down for going idle.
+    this.startPacer();
+
     if (this.cfg.greeting) {
       this.cfg.provider.sendText(this.cfg.greeting);
     }
+  }
+
+  /** Send one 20 ms telephony media frame (real audio or silence) every 20 ms. */
+  private startPacer(): void {
+    if (this.paceTimer) return;
+    const F = CallSession.FRAME_BYTES;
+    this.paceTimer = setInterval(() => {
+      if (this.socket.readyState !== this.socket.OPEN) return;
+      let frame: Buffer;
+      if (this.outQueue.length >= F) {
+        frame = this.outQueue.subarray(0, F);
+        this.outQueue = this.outQueue.subarray(F);
+      } else if (this.outQueue.length > 0) {
+        // Pad a short tail up to a full frame with silence.
+        frame = Buffer.concat([this.outQueue, Buffer.alloc(F - this.outQueue.length, this.silenceByte())]);
+        this.outQueue = Buffer.alloc(0);
+      } else {
+        // Idle: comfort silence keeps VoiceLink's bot leg alive.
+        frame = Buffer.alloc(F, this.silenceByte());
+      }
+      const media: Record<string, unknown> = { payload: frame.toString("base64") };
+      const envelope: Record<string, unknown> = { event: "media", media };
+      if (this.streamSid) envelope.streamSid = this.streamSid;
+      this.socket.send(JSON.stringify(envelope));
+    }, 20);
   }
 
   private onMessage(raw: string): void {
@@ -202,6 +249,10 @@ export class CallSession {
           "telephony media format detected",
         );
       }
+      // Echo the stream id back on outbound media (Twilio-style providers
+      // key media frames by streamSid).
+      const sid = (start?.stream_sid as string) ?? (msg as { stream_sid?: string }).stream_sid;
+      if (sid) this.streamSid = sid;
       if (this.cfg.onStartFrame) {
         // VoiceLink uses snake_case (call_sid/stream_sid/custom_parameters);
         // Twilio uses camelCase. Accept both.
@@ -241,12 +292,21 @@ export class CallSession {
       log.info({ callId: this.cfg.callId }, "clear event — cancelling response");
       this.cfg.provider.cancel?.();
       this.outboundResample = makeResampleState();
+      // Drop any queued agent audio so the agent stops talking immediately.
+      this.outQueue = Buffer.alloc(0);
     } else if (msg.event === "stop") {
       this.close();
     }
   }
 
+  private closed = false;
   async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    if (this.paceTimer) {
+      clearInterval(this.paceTimer);
+      this.paceTimer = undefined;
+    }
     const ms = Date.now() - this.startedAt;
     log.info({ callId: this.cfg.callId, ms }, "session closed");
     if (this.started) {

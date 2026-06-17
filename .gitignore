@@ -10,3 +10,8 @@ packages/*/dist/
 coverage/
 .data/
 .pr-bodies/
+# Local datastore + browser-tool artifacts — never commit, and never let a
+# file-watcher see them (mongod writing here under `tsx watch` restarts the
+# API mid-call and kills the WebSocket).
+.mongo-data/
+.playwright-mcp/

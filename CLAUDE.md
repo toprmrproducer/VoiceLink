@@ -41,8 +41,18 @@ for inbound and outbound phone calls.
   discover client_id via `GET /v1/reseller/clients` and routing via
   `GET /v1/call-routing/list`.
 - Public reachability: VoiceLink's cloud must reach this server, so run a tunnel
-  (`cloudflared tunnel --url http://localhost:4000`) and set `WS_BASE_URL` to the
-  `wss://` form. Quick tunnels are ephemeral — re-register bots if the URL changes.
+  (`cloudflared tunnel --url http://127.0.0.1:4000`, use 127.0.0.1 not `localhost`
+  so cloudflared does not dial the origin over IPv6 `[::1]` and fail) and set
+  `WS_BASE_URL` to the `wss://` form. Quick tunnels are ephemeral — re-register
+  bots (`scripts/setup-voicelink.ts`) if the URL changes.
+- **Calls cut at ~1-3s? Two causes, both fixed:** (1) The bot leg needs a
+  CONTINUOUS 20 ms media stream — if the agent goes silent and we send nothing,
+  VoiceLink tears down the bot leg (cause 32). `session-manager.ts` runs a 20 ms
+  pacer that sends real audio when speaking and A-law/µ-law silence otherwise.
+  (2) Do NOT run the API under `tsx watch` while `mongod`'s data dir is inside the
+  repo — every DB write restarts the API mid-call and kills the WS. `dev` is plain
+  `tsx` (no watch); `.mongo-data/` is gitignored. Use `dev:watch` only for code work
+  with no live calls.
 
 ## Run locally
 ```bash
